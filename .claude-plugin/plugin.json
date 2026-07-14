@@ -1,0 +1,21 @@
+{
+  "name": "grand-to-ground",
+  "version": "0.1.0",
+  "description": "An adversarial, Lakatos-inspired research loop for AI-assisted social science. Converge grand theoretical frameworks into identifiable, falsifiable research questions through deduction, a three-critic tribunal, and empirical grounding — with the human researcher as final arbiter.",
+  "author": {
+    "name": "Rick Ma"
+  },
+  "homepage": "https://github.com/HongtaoMa1/grand-to-ground",
+  "repository": "https://github.com/HongtaoMa1/grand-to-ground",
+  "license": "MIT",
+  "keywords": [
+    "research-methodology",
+    "social-science",
+    "economics",
+    "finance",
+    "multi-agent",
+    "adversarial-review",
+    "lakatos",
+    "ai-assisted-research"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "grand-to-ground",
+  "owner": {
+    "name": "Rick Ma"
+  },
+  "plugins": [
+    {
+      "name": "grand-to-ground",
+      "source": "./",
+      "description": "Adversarial, Lakatos-inspired research loop for AI-assisted social science: converge grand frameworks into identifiable, falsifiable questions."
+    }
+  ]
+}
