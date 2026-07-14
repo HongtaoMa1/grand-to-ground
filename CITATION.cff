@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use Grand-to-Ground in your research, please cite it as below."
+title: "Grand-to-Ground (G2G): An adversarial, Lakatos-inspired research loop for AI-assisted social science"
+type: software
+authors:
+  - family-names: "Ma"
+    given-names: "Rick"
+    alias: "Hongtao Ma"
+version: 0.1.0
+date-released: 2026-07-13
+url: "https://github.com/HongtaoMa1/grand-to-ground"
+repository-code: "https://github.com/HongtaoMa1/grand-to-ground"
+license: MIT
+keywords:
+  - research methodology
+  - social science
+  - economics
+  - multi-agent systems
+  - adversarial review
+  - Lakatos
+abstract: >-
+  Grand-to-Ground (G2G) is a research methodology, packaged as a Claude plugin,
+  for AI-assisted research in lab-free, deduction-first disciplines. It treats
+  the researcher's grand theoretical framework as a question generator and
+  converges each cycle onto one identifiable, falsifiable question via
+  formalization, axiom-protected deduction, an isolated three-critic adversarial
+  tribunal with anti-sycophancy quotas, empirical grounding, and scored stopping
+  rules — with the human researcher as final arbiter.
