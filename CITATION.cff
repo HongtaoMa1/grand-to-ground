@@ -6,8 +6,8 @@ authors:
   - family-names: "Ma"
     given-names: "Rick"
     alias: "Hongtao Ma"
-version: 0.1.0
-date-released: 2026-07-13
+version: 0.2.0
+date-released: 2026-08-09
 url: "https://github.com/HongtaoMa1/grand-to-ground"
 repository-code: "https://github.com/HongtaoMa1/grand-to-ground"
 license: MIT
@@ -23,6 +23,10 @@ abstract: >-
   for AI-assisted research in lab-free, deduction-first disciplines. It treats
   the researcher's grand theoretical framework as a question generator and
   converges each cycle onto one identifiable, falsifiable question via
-  formalization, axiom-protected deduction, an isolated three-critic adversarial
-  tribunal with anti-sycophancy quotas, empirical grounding, and scored stopping
-  rules — with the human researcher as final arbiter.
+  multi-operationalized formalization, axiom-protected parallel deduction, an
+  isolated three-critic adversarial tribunal with anti-sycophancy quotas, a
+  severity dial and an independent recomputing defender, versioned
+  tick-to-approve research plans, empirical grounding, and scored stopping
+  rules — with the human researcher as final arbiter. Version 2 is
+  field-hardened: every change traces to a logged lesson from a month of intensive
+  live use on a finance research programme.

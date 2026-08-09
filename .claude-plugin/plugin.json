@@ -1,7 +1,7 @@
 {
   "name": "grand-to-ground",
-  "version": "0.1.0",
-  "description": "An adversarial, Lakatos-inspired research loop for AI-assisted social science. Converge grand theoretical frameworks into identifiable, falsifiable research questions through deduction, a three-critic tribunal, and empirical grounding — with the human researcher as final arbiter.",
+  "version": "0.2.0",
+  "description": "An adversarial, Lakatos-inspired research loop for AI-assisted social science: converge grand frameworks into identifiable, falsifiable questions via parallel deduction, a three-critic tribunal with a severity dial and a recomputing defender, tick-to-approve research plans, and empirical grounding — the human researcher is final arbiter. Field-hardened: every v2 change traces to a logged lesson from a month of live use.",
   "author": {
     "name": "Rick Ma"
   },
@@ -16,6 +16,7 @@
     "multi-agent",
     "adversarial-review",
     "lakatos",
-    "ai-assisted-research"
+    "ai-assisted-research",
+    "research-planning"
   ]
 }

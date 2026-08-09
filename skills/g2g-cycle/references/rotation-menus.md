@@ -1,6 +1,8 @@
 # Rotation menus — theoretical framework families by discipline
 
-Purpose: enforce R1 (no two consecutive cycles in the same family). These are defaults; the user edits their own copy in `g2g/00_programme.md` at setup. A "family" is a way of generating mechanisms, not a single model.
+Purpose: enforce R1 on its first axis (no two consecutive cycles in the same framework family). These are defaults; the user edits their own copy in `g2g/00_programme.md` at setup. A "family" is a way of generating mechanisms, not a single model.
+
+**R1's second axis — data domain — has no menu: it is whatever partition is natural to the programme** (e.g., options data / returns-and-factors / flow data / text-and-media / survey). Record both axes per cycle in the registry's genealogy line; two consecutive cycles in the same data domain is a rotation violation on par with repeating a family — a documented ossification path that family rotation alone does not catch.
 
 ## Economics / finance (primary audience)
 
@@ -15,6 +17,7 @@ Purpose: enforce R1 (no two consecutive cycles in the same family). These are de
 - Growth and distribution (Kaldor facts, Piketty-style wealth dynamics, structural transformation)
 - Market microstructure and frictions (price stickiness, pass-through asymmetry, menu costs)
 - General equilibrium with heterogeneous agents (HANK-style logic, incidence analysis)
+- Learning and time-varying parameters (adaptive learning, rolling estimation, structural breaks)
 
 ## Sociology
 
@@ -34,6 +37,6 @@ Evolutionary/selection arguments · Agent-based modeling · Causal-graph reasoni
 
 ## Usage rules
 
-- Record the family used in every registry row and conclusion card.
-- If the user insists on repeating a family two cycles in a row, comply but log a rotation waiver in the contradiction log (the record keeps everyone honest).
+- Record the family AND the data domain in every registry row and conclusion card — the genealogy line.
+- If the user insists on repeating either axis two cycles in a row, comply but log a rotation waiver in the contradiction log (the record keeps everyone honest).
 - When a family is exhausted for a question, that is information: log which families the question has survived — robustness across families is a quality signal grounding cannot give.
