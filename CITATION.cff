@@ -6,8 +6,8 @@ authors:
   - family-names: "Ma"
     given-names: "Rick"
     alias: "Hongtao Ma"
-version: 0.2.0
-date-released: 2026-08-09
+version: 0.3.0
+date-released: 2026-09-14
 url: "https://github.com/HongtaoMa1/grand-to-ground"
 repository-code: "https://github.com/HongtaoMa1/grand-to-ground"
 license: MIT
@@ -20,13 +20,23 @@ keywords:
   - Lakatos
 abstract: >-
   Grand-to-Ground (G2G) is a research methodology, packaged as a Claude plugin,
-  for AI-assisted research in lab-free, deduction-first disciplines. It treats
-  the researcher's grand theoretical framework as a question generator and
-  converges each cycle onto one identifiable, falsifiable question via
-  multi-operationalized formalization, axiom-protected parallel deduction, an
-  isolated three-critic adversarial tribunal with anti-sycophancy quotas, a
-  severity dial and an independent recomputing defender, versioned
-  tick-to-approve research plans, empirical grounding, and scored stopping
-  rules — with the human researcher as final arbiter. Version 2 is
-  field-hardened: every change traces to a logged lesson from a month of intensive
-  live use on a finance research programme.
+  for AI-assisted research in lab-free, deduction-first disciplines. Its first
+  operating mode, the research cycle, treats the researcher's grand theoretical
+  framework as a question generator and converges each round onto one
+  identifiable, falsifiable question via multi-operationalized formalization,
+  axiom-protected parallel deduction, an isolated three-critic adversarial
+  tribunal with anti-sycophancy quotas, a severity dial and an independent
+  recomputing defender, versioned tick-to-approve research plans, empirical
+  grounding, and scored stopping rules. Version 3 adds a second operating mode,
+  the Theory Forge, for building a system of propositions: candidates are
+  deduced one by one and verified one by one by a cold-start verifier at a
+  binary logic gate, then entered into a dependency graph in which changing an
+  assumption cascades revocation to everything that rests on it. The two gates
+  are separate — the logic gate never rules on empirical truth, and the
+  empirical gate is opened periodically by a theory tribunal that grounds the
+  milestone subgraph and updates empirical status without touching logical
+  status. A single line starts either mode; unattended runs are bounded by a
+  token-budget fence rather than by permission prompts, and each class of agent
+  runs at its own model tier, with the verification gate never below the
+  charter's default. Throughout, the human researcher is the final arbiter:
+  axioms are never ratified by the machine.
