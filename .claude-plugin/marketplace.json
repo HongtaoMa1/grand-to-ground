@@ -7,7 +7,7 @@
     {
       "name": "grand-to-ground",
       "source": "./",
-      "description": "Adversarial, Lakatos-inspired research loop for AI-assisted social science, now in two modes: the research cycle (parallel deduction, a three-critic tribunal with a severity dial, tick-to-approve research plans) and the new Theory Forge (propositions checked one by one at a cold-start verification gate, entered into a proposition graph with cascade revocation) — both started by one line, \"run G2G\", and bounded, when run unattended, by a token budget."
+      "description": "Adversarial, Lakatos-inspired research loop for AI-assisted social science, in two modes: the research cycle (parallel deduction, a three-critic tribunal with a severity dial, tick-to-approve research plans) and the Theory Forge (propositions checked one by one at a cold-start verification gate, entered into a proposition graph with cascade revocation) — both started by one line, \"run G2G\", and bounded, when run unattended, by account usage."
     }
   ]
 }

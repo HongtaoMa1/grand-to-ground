@@ -6,8 +6,8 @@ authors:
   - family-names: "Ma"
     given-names: "Rick"
     alias: "Hongtao Ma"
-version: 0.3.0
-date-released: 2026-09-14
+version: 0.4.0
+date-released: 2026-11-16
 url: "https://github.com/HongtaoMa1/grand-to-ground"
 repository-code: "https://github.com/HongtaoMa1/grand-to-ground"
 license: MIT
@@ -25,7 +25,7 @@ abstract: >-
   framework as a question generator and converges each round onto one
   identifiable, falsifiable question via multi-operationalized formalization,
   axiom-protected parallel deduction, an isolated three-critic adversarial
-  tribunal with anti-sycophancy quotas, a severity dial and an independent
+  tribunal that reports faults only, a severity dial and an independent
   recomputing defender, versioned tick-to-approve research plans, empirical
   grounding, and scored stopping rules. Version 3 adds a second operating mode,
   the Theory Forge, for building a system of propositions: candidates are
@@ -35,8 +35,8 @@ abstract: >-
   are separate — the logic gate never rules on empirical truth, and the
   empirical gate is opened periodically by a theory tribunal that grounds the
   milestone subgraph and updates empirical status without touching logical
-  status. A single line starts either mode; unattended runs are bounded by a
-  token-budget fence rather than by permission prompts, and each class of agent
-  runs at its own model tier, with the verification gate never below the
-  charter's default. Throughout, the human researcher is the final arbiter:
-  axioms are never ratified by the machine.
+  status. A single line starts either mode; unattended runs are bounded by the
+  account's usage (wind down at 80%, stop at 100%) rather than by permission
+  prompts, and each class of agent runs at its own model tier, with the
+  verification gate never below the charter's default. Throughout, the human
+  researcher is the final arbiter: axioms are never ratified by the machine.

@@ -1,7 +1,7 @@
 {
   "name": "grand-to-ground",
-  "version": "0.3.0",
-  "description": "An adversarial, Lakatos-inspired research loop for AI-assisted social science, in two modes. The research cycle turns a grand framework into one identifiable, falsifiable question: parallel deduction, a three-critic tribunal, grounding, tick-to-approve plans. The Theory Forge builds a system: propositions checked one by one at a cold-start verification gate, entered into a proposition graph with cascade revocation. One line (\"run G2G\") starts it; unattended runs are bounded by a token budget.",
+  "version": "0.4.0",
+  "description": "An adversarial, Lakatos-inspired research loop for AI-assisted social science, in two modes. The research cycle turns a grand framework into one identifiable, falsifiable question: parallel deduction, a three-critic tribunal, grounding, tick-to-approve plans. The Theory Forge builds a system: propositions checked one by one at a cold-start verification gate, entered into a proposition graph with cascade revocation. One line (\"run G2G\") starts it; unattended runs are bounded by account usage.",
   "author": {
     "name": "Rick Ma"
   },

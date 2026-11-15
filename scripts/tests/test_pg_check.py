@@ -1,14 +1,17 @@
 """Unit tests for scripts/pg_check.py.
 
-Run from the plugin root:  python -m unittest discover -s scripts/tests -v
+Run from the plugin root:  python -m pytest -q scripts/tests
 
 fixture_ok/  - a minimal clean Forge programme (must produce zero violations)
 fixture_bad/ - one programme that trips every violation code at least once; it also carries the
                positive control for the gate-exempt revision (P-0038 -> P-0038.1), which must
                trip nothing at all
+The pre-gate, DANGLING_FIELD, reason-category and current / historical tests write fictional
+nodes into temporary copies of fixture_ok; the fixtures themselves are never modified.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -17,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parent
@@ -112,6 +116,23 @@ class ParserTests(unittest.TestCase):
             "- λ · shadow price\n- κ: curvature\n")
         self.assertEqual(glossary, {"ρ_i", "x_i", "λ", "κ"})
 
+    def test_glossary_parser_escaped_pipe_and_parenthetical_notes(self):
+        # A literal pipe is written \| inside a table cell; a trailing note is ignored - a full-width
+        # one always, an ASCII one only after whitespace, so f(x) stays f(x).
+        text = ("| symbol / term | meaning | dimension or range of values | introduced by (A-/D-/P- ID) | first occurrence |\n"
+                "|---|---|---|---|---|\n"
+                "| ω\\|ℓ | ω restricted to ℓ | set | P-0021 | P-0021 Statement |\n"
+                "| 𝒬（可行集） | feasible set | set | P-0011 | P-0011 Statement |\n"
+                "| `Θ` (type space) | types | set | A-02 | axioms.md |\n"
+                "| f(x) | payoff at x | real | D-01 | axioms.md |\n")
+        self.assertEqual(pg.parse_glossary(text), {"ω|ℓ", "𝒬", "Θ", "f(x)"})
+        self.assertEqual(pg.glossary_entries(text)[0], ("ω|ℓ", "P-0021"))
+        for raw, bare in (("ω\\|ℓ", "ω|ℓ"), ("ω|ℓ", "ω|ℓ"), ("𝒬（可行集）", "𝒬"), ("𝒬 (feasible set)", "𝒬"),
+                          ("`𝒬` (feasible set):", "𝒬"), ("f(x)", "f(x)"), ("(a, b)", "(a, b)"), ("`κ`:", "κ")):
+            self.assertEqual(pg.norm_symbol(raw), bare, raw)
+        fm, _ = pg.parse_frontmatter("---\nglossary_introduces: [𝒬（可行集, 有限）, ω\\|ℓ]\n---\n")
+        self.assertEqual([pg.norm_symbol(x) for x in fm["glossary_introduces"]], ["𝒬", "ω|ℓ"])
+
     def test_compute_sha_ignores_line_endings_trailing_space_and_notes(self):
         a = pg.split_sections("## Statement\nS\n## Derivation\nD\n## Notes\nN1\n")
         b = pg.split_sections("## Statement\r\nS   \r\n## Derivation\r\nD\r\n## Notes\r\nN2\r\n")
@@ -174,12 +195,13 @@ class FixtureOkTests(unittest.TestCase):
         self.assertNotIn("forge-log has no entry", text)
 
     def test_report_flags_forge_log_behind_the_nodes_on_disk(self):
-        # Nodes landed but the round entry not written yet: 0 submissions / 0 passed vs 6 verified.
-        # Defect 12 of the pre-release trial Forge round (2026-09-14).
+        # Nodes landed but the round entry not written yet: 0 submissions / 0 passed vs 6 verified on disk.
+        # Defect 12 of the pre-release trial Forge round (2026-09-14).  The cadence count is current
+        # revisions only: 5, since P-0002 is historical beside P-0002.1.
         prog, violations = check(FIXTURE_OK)
         prog.forge_log = "# Forge log (append-only)\n"
         rep = pg.build_report(prog, violations)
-        self.assertEqual((rep["cadence"]["submitted"], rep["cadence"]["passed"], rep["cadence"]["verified"]), (0, 0, 6))
+        self.assertEqual((rep["cadence"]["submitted"], rep["cadence"]["passed"], rep["cadence"]["verified"]), (0, 0, 5))
         self.assertTrue(rep["cadence"]["forge_log_behind"])
         self.assertIn("(forge-log has no entry for the nodes on disk yet — write the round entry)",
                       pg.render_report(rep, FIXTURE_OK))
@@ -361,6 +383,276 @@ class FillShaTests(TempCopyMixin, unittest.TestCase):
         self.assertIn(b"\r\ncontent_sha: ", raw)
         self.assertNotIn(b"\n\n\n", raw.replace(b"\r\n", b"\n"))
         self.assertEqual(check(root)[1], [])
+
+
+#: A fictional candidate for the pre-gate tests (written into a temporary copy of fixture_ok).
+CANDIDATE = """---
+id: {nid}
+title: Fictional pre-gate candidate {nid}
+kind: lemma
+status: proposed
+empirical_status: untested
+layer: micro
+scope: P-0004
+predecessors: [P-0004]
+axioms_used: [A-01, A-02]
+definitions_used: [D-01]
+assumptions_used: []
+external_refs: []
+conditional_on: []
+glossary_introduces: [{introduces}]
+operationalization: strengthened
+markers: [SIG]
+interp_pending: []
+verification:
+supersedes:
+revision_of: {revision_of}
+revoked_by:
+content_sha:
+submitted_by: deducer-1 · round 3 · 2026-09-14
+---
+## Statement
+{statement}
+
+## Derivation
+{derivation}
+
+## Falsification surface
+Fixture text.
+
+## Notes
+Fictional node for the pre-gate tests.
+"""
+
+
+class PregateTests(TempCopyMixin, unittest.TestCase):
+    """``--pregate``: the registration check run on named candidates before each verifier."""
+
+    def setUp(self):
+        self.root = self.copy_fixture(FIXTURE_OK)
+
+    def add(self, nid: str, introduces: str = "", statement: str = "A fictional statement.",
+            derivation: str = "Step 1: by P-0004.", revision_of: str = "") -> None:
+        (self.root / T / "candidates" / f"{nid}.md").write_text(
+            CANDIDATE.format(nid=nid, introduces=introduces, statement=statement, derivation=derivation,
+                             revision_of=revision_of), encoding="utf-8", newline="\n")
+
+    def add_glossary_row(self, row: str) -> None:
+        glossary = self.root / T / "glossary.md"
+        glossary.write_text(glossary.read_text(encoding="utf-8") + row + "\n", encoding="utf-8", newline="\n")
+
+    def codes(self, nid: str) -> list[str]:
+        prog, _ = check(self.root)
+        return [v.code for v in pg.pregate(prog, prog.nodes[nid])]
+
+    def test_codes_stay_out_of_the_default_run(self):
+        self.assertFalse(set(pg.PREGATE_CODES) & set(pg.CODES))
+        self.assertIn("DANGLING_FIELD", pg.INFO_CODES)
+        self.assertEqual(self.codes("P-0006"), [])  # fixture_ok's returned candidate lists the κ it defines
+        self.add("P-0007", statement="Let θ := ρ_i / 2. We call ρ_i ≥ 1 the **upper band**.")
+        self.assertEqual(check(self.root)[1], [], "candidates stay exempt at round start")
+
+    def test_collision_with_another_familys_symbol(self):
+        self.add("P-0007", introduces="ρ_i")  # ρ_i is registered, introduced by P-0001
+        self.assertEqual(self.codes("P-0007"), ["SYMBOL_COLLISION"])
+
+    def test_a_revision_relisting_its_own_familys_symbol_is_exempt(self):
+        self.add("P-0001.1", introduces="ρ_i", revision_of="P-0001 · mechanical",
+                 statement="The relative position **ρ_i** := x_i / r_i, restated in the new wording.")
+        self.assertEqual(self.codes("P-0001.1"), [])
+
+    def test_colon_equals_unlisted_then_listed(self):
+        self.add("P-0007", statement="Let θ := ρ_i / 2 (half the position).")
+        prog, _ = check(self.root)
+        findings = pg.pregate(prog, prog.nodes["P-0007"])
+        self.assertEqual([v.code for v in findings], ["UNLISTED_DEFINITION"])
+        self.assertIn("θ", findings[0].message)
+        self.add("P-0007", introduces="θ", statement="Let θ := ρ_i / 2 (half the position).")
+        self.assertEqual(self.codes("P-0007"), [])
+
+    def test_function_definition_counts_for_its_name(self):
+        self.add("P-0007", introduces="g", derivation="Step 1: g(ρ) := ρ / 2 for ρ ≥ 0, by P-0004.")
+        self.assertEqual(self.codes("P-0007"), [])
+
+    def test_bold_unlisted_and_unregistered(self):
+        self.add("P-0007", derivation="Step 1: we call ρ_i ≥ 1 the **upper band**, by P-0004.")
+        self.assertEqual(self.codes("P-0007"), ["UNLISTED_DEFINITION"])
+
+    def test_bold_registered_by_another_family_collides_same_family_does_not(self):
+        self.add_glossary_row("| comfort band | the range 1/2 ≤ ρ_i ≤ 1 | interval | P-0003 | P-0003 Notes |")
+        self.add("P-0007", statement="On the **comfort band** utility is flat.")
+        self.assertEqual(self.codes("P-0007"), ["SYMBOL_COLLISION"])
+        self.add("P-0003.1", revision_of="P-0003 · mechanical", statement="On the **comfort band** V' > 0.")
+        self.assertEqual(self.codes("P-0003.1"), [])
+
+    def test_order_derivatives_unlisted_then_listed(self):
+        text = "For bundles a, b let a ≼_c b mean ρ(a) ≤ ρ(b); a ≺_c b is its strict part and b ≽_c a its inverse."
+        self.add("P-0007", introduces="≼_c", statement=text)
+        prog, _ = check(self.root)
+        findings = pg.pregate(prog, prog.nodes["P-0007"])
+        self.assertEqual(sorted(v.message.split()[0] for v in findings), ["≺_c", "≽_c"])
+        self.assertEqual({v.code for v in findings}, {"UNLISTED_ORDER_DERIVATIVE"})
+        self.add("P-0007", introduces="≼_c, ≺_c, ≽_c", statement=text)
+        self.assertEqual(self.codes("P-0007"), [])
+
+    def test_escaped_pipe_row_is_matched_by_both_spellings(self):
+        self.add_glossary_row("| ω\\|ℓ | ω restricted to ℓ | set | P-0003 | P-0003 Notes |")
+        prog, _ = check(self.root)
+        self.assertIn("ω|ℓ", prog.glossary)
+        self.add("P-0007", introduces="ω|ℓ")
+        self.add("P-0008", introduces="ω\\|ℓ")
+        self.assertEqual(self.codes("P-0007"), ["SYMBOL_COLLISION"])
+        self.assertEqual(self.codes("P-0008"), ["SYMBOL_COLLISION"])
+
+    def test_parenthetical_notes_and_function_notation(self):
+        self.add_glossary_row("| 𝒬 | feasible set | set | P-0003 | P-0003 Notes |")
+        self.add_glossary_row("| f | payoff | real | P-0003 | P-0003 Notes |")
+        self.add("P-0007", introduces="𝒬（可行集）")
+        self.add("P-0008", introduces="𝒬 (feasible set)")
+        self.add("P-0009", introduces="f(x)")  # f(x) stays f(x): not the registered f
+        self.assertEqual(self.codes("P-0007"), ["SYMBOL_COLLISION"])
+        self.assertEqual(self.codes("P-0008"), ["SYMBOL_COLLISION"])
+        self.assertEqual(self.codes("P-0009"), [])
+
+    def test_cli_exit_code_json_and_errors(self):
+        self.add("P-0007", introduces="ρ_i", statement="Let θ := ρ_i / 2.")      # 2 findings
+        self.add("P-0008", derivation="Step 1: the **upper band**, by P-0004.")  # 1 finding
+        result = run_cli(str(self.root), "--pregate", "P-0007", "P-0008")
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        self.assertEqual((result.returncode, len(lines)), (3, 3), result.stderr)
+        self.assertEqual(sorted(line.split("  ", 2)[0] for line in lines),
+                         ["SYMBOL_COLLISION", "UNLISTED_DEFINITION", "UNLISTED_DEFINITION"])
+        data = json.loads(run_cli(str(self.root), "--pregate", "P-0007", "--json").stdout)
+        self.assertEqual(set(data), {"version", "programme_root", "theory_dir", "pregate", "findings",
+                                     "finding_count", "exit_code"})
+        self.assertEqual((data["pregate"], data["finding_count"], data["exit_code"]), (["P-0007"], 2, 2))
+        self.assertEqual(set(data["findings"][0]), {"code", "file", "message"})
+        self.assertEqual(run_cli(str(self.root), "--pregate", "P-0006").returncode, 0)
+        for bad in (["--pregate", "P-0099"], ["--pregate", "P-0004"], ["--pregate", "P-0006", "--report"]):
+            result = run_cli(str(self.root), *bad)
+            self.assertEqual(result.returncode, pg.EXIT_USAGE, bad)
+            self.assertEqual(result.stdout.strip(), "", bad)
+
+    def test_console_fallback_never_raises(self):
+        # A console that could not be switched to UTF-8 gets ASCII glyphs and "?" for what its code page lacks.
+        with mock.patch.object(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="cp1252")):
+            self.assertEqual(pg._console_safe("ω|ℓ — x · y", False), "?|? - x , y")
+        self.assertEqual(pg._console_safe("ω|ℓ — x", True), "ω|ℓ — x")
+
+
+class DanglingFieldTests(TempCopyMixin, unittest.TestCase):
+    """Informational DANGLING_FIELD: ``revision_of`` / ``supersedes`` naming no node."""
+
+    def test_fields_naming_no_node_are_reported_not_counted(self):
+        root = self.copy_fixture(FIXTURE_OK)
+        rev = root / T / "propositions" / "P-0002.1.md"
+        rev.write_text(rev.read_text(encoding="utf-8").replace("revision_of: P-0002", "revision_of: P-0098"),
+                       encoding="utf-8", newline="\n")
+        cand = root / T / "candidates" / "P-0006.md"
+        cand.write_text(cand.read_text(encoding="utf-8").replace("supersedes:\n", "supersedes: P-0099\n"),
+                        encoding="utf-8", newline="\n")
+        prog, violations = check(root)
+        self.assertEqual(violations, [])
+        info = [(i["code"], i["file"], i["message"]) for i in pg.build_report(prog, violations)["informational"]]
+        self.assertEqual(info, [("DANGLING_FIELD", T + "propositions/P-0002.1.md", "revision_of P-0098 names no node"),
+                                ("DANGLING_FIELD", T + "candidates/P-0006.md", "supersedes P-0099 names no node")])
+
+    def test_a_revision_does_not_name_its_own_family_by_itself(self):
+        root = self.copy_fixture(FIXTURE_OK)
+        src = (root / T / "propositions" / "P-0002.1.md").read_text(encoding="utf-8")
+        (root / T / "propositions" / "P-0002.md").unlink()
+        prog, violations = check(root)
+        info = [i["code"] for i in pg.build_report(prog, violations)["informational"]]
+        self.assertIn("revision_of: P-0002", src)
+        self.assertIn("DANGLING_FIELD", info)
+
+
+class ReasonCategoryTests(TempCopyMixin, unittest.TestCase):
+    """Reason categories of revocations and revisions (category first in ``revoked_by``, after the
+    ID in ``revision_of``); a value without one counts as uncategorised; gate misses on their own line."""
+
+    def node(self, revoked_by: str = "", revision_of: str = "") -> pg.Node:
+        fm, body = pg.parse_frontmatter(f"---\nid: P-0009\nkind: lemma\nstatus: revoked\npredecessors: []\n"
+                                        f"revoked_by: {revoked_by}\nrevision_of: {revision_of}\n---\n## Statement\nS\n")
+        return pg.make_node(Path("P-0009.md"), "P-0009.md", "propositions", fm, body)
+
+    def test_parsing(self):
+        self.assertEqual(self.node("cascade · predecessor P-0003 revoked · 2026-10-01").revoked_category, "cascade")
+        self.assertEqual(self.node("gate-miss · TT-02 counterexample · 2026-10-02").revoked_category, "gate-miss")
+        self.assertEqual(self.node("A-08 revoked · 2026-09-13").revoked_category, "")
+        self.assertEqual(self.node("algebra slip (a mechanical error) · 2026-11-01").revoked_category, "")
+        self.assertEqual(self.node(revision_of="P-0004 (fixes the cascade note)").revision_category, "")
+        rev = self.node(revision_of="P-0004 · human-ruling")
+        self.assertEqual((rev.revision_of, rev.revision_category), ("P-0004", "human-ruling"))
+        self.assertEqual(self.node(revision_of="P-0004").revision_category, "")
+
+    def test_report_counts(self):
+        prog, violations = check(FIXTURE_OK)
+        reasons = pg.build_report(prog, violations)["reasons"]
+        self.assertEqual(reasons, {"revocations": {}, "revisions": {"uncategorised": 1}, "gate_misses": 0})
+        root = self.copy_fixture(FIXTURE_OK)
+        rev = root / T / "propositions" / "P-0002.1.md"
+        rev.write_text(rev.read_text(encoding="utf-8").replace("revision_of: P-0002", "revision_of: P-0002 · gate-miss"),
+                       encoding="utf-8", newline="\n")
+        node = root / T / "propositions" / "P-0005.md"
+        node.write_text(node.read_text(encoding="utf-8").replace("status: verified", "status: revoked").replace(
+            "revoked_by:\n", "revoked_by: human-ruling · the human replaced the premise · 2026-09-14\n"),
+            encoding="utf-8", newline="\n")
+        prog, violations = check(root)
+        self.assertEqual(violations, [])
+        rep = pg.build_report(prog, violations)
+        self.assertEqual(rep["reasons"], {"revocations": {"human-ruling": 1}, "revisions": {"gate-miss": 1},
+                                          "gate_misses": 1})
+        text = pg.render_report(rep, root)
+        for line in ("revocations by reason: human-ruling 1", "revisions by reason: gate-miss 1",
+                     "gate misses (revocations and revisions): 1"):
+            self.assertIn(line, text)
+
+
+class VersionSplitTests(TempCopyMixin, unittest.TestCase):
+    """Status counts split into current revisions (what a bare ID resolves to) and historical ones;
+    the theory-tribunal hint counts current verified nodes."""
+
+    def test_fixture_ok_split(self):
+        prog, violations = check(FIXTURE_OK)
+        rep = pg.build_report(prog, violations)
+        self.assertEqual(rep["status"], {"current": {"proposed": 1, "verified": 5}, "historical": {"verified": 1}})
+        self.assertEqual((rep["cadence"]["verified"], rep["cadence"]["next_theory_tribunal_at"]), (5, 25))
+        text = pg.render_report(rep, FIXTURE_OK)
+        self.assertIn("status (historical revisions): verified 1", text)
+        self.assertIn("verified nodes (current revisions) 5 → next theory tribunal at 25", text)
+        root = self.copy_fixture(FIXTURE_OK)  # a revision still under the gate is not history
+        (root / T / "candidates" / "P-0003.1.md").write_text(
+            (root / T / "propositions" / "P-0003.md").read_text(encoding="utf-8").replace("id: P-0003\n", "id: P-0003.1\n")
+            .replace("status: verified", "status: proposed").replace("revision_of:\n", "revision_of: P-0003 · mechanical\n"),
+            encoding="utf-8", newline="\n")
+        prog, violations = check(root)
+        self.assertEqual(pg.build_report(prog, violations)["status"],
+                         {"current": {"proposed": 2, "verified": 5}, "historical": {"verified": 1}})
+
+    def test_scope_mismatch_message_names_the_target_theorem_id(self):
+        root = self.copy_fixture(FIXTURE_OK)
+        node = root / T / "propositions" / "P-0001.md"
+        node.write_text(node.read_text(encoding="utf-8").replace("scope: P-0004", "scope: micro layer"),
+                        encoding="utf-8", newline="\n")
+        prog, violations = check(root)
+        info = [i for i in pg.build_report(prog, violations)["informational"] if i["code"] == "SCOPE_MISMATCH"]
+        self.assertEqual(len(info), 1)
+        self.assertIn("whose scope holds this target theorem's ID P-0004", info[0]["message"])
+
+    def test_a_revised_target_theorem_is_listed_once_and_bare_scopes_resolve_to_it(self):
+        root = self.copy_fixture(FIXTURE_OK)
+        props, vrecs = root / T / "propositions", root / T / "verifications"
+        (props / "P-0004.1.md").write_text((props / "P-0004.md").read_text(encoding="utf-8").replace(
+            "id: P-0004\n", "id: P-0004.1\n").replace("V-0004 (pass", "V-0008 (pass").replace(
+            "revision_of:\n", "revision_of: P-0004 · gate-miss\n"), encoding="utf-8", newline="\n")
+        (vrecs / "V-0008.md").write_text((vrecs / "V-0004.md").read_text(encoding="utf-8").replace(
+            "id: V-0004", "id: V-0008").replace("candidate: P-0004 ", "candidate: P-0004.1 "),
+            encoding="utf-8", newline="\n")
+        prog, violations = check(root)
+        rep = pg.build_report(prog, violations)
+        self.assertEqual((violations, [t["id"] for t in rep["theorems"]]), ([], ["P-0004.1"]))
+        self.assertNotIn("SCOPE_MISMATCH", [i["code"] for i in rep["informational"]])
 
 
 if __name__ == "__main__":

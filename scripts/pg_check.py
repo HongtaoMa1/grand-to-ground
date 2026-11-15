@@ -4,23 +4,30 @@
 Implements the "authority by construction" check list of docs/METHODOLOGY.md 3b.5 over a
 programme workspace (``g2g/07_theory/``): the graph is acyclic; no dangling predecessors;
 no ``proposed`` node in the formal directory; every ``verified`` node has a passing
-verification record; no unregistered symbols; revocations and supersessions have cascaded;
+verification record; every ``verified`` node's newly introduced symbols (``glossary_introduces``)
+are registered; revocations and supersessions have cascaded;
 bare IDs P-xxxx resolve to the current revision; no ``verified`` node cites a pending
 axiom or base definition; ``conditional_on`` is inherited; the closure test for theorems;
 neither ``[SIG]`` nor a non-empty ``conditional_on`` in the support closure of a node tagged
 ``faithful``; the one gate-exempt revision (the mechanical ``conditional on CJ-xx`` ->
 ``by A-xx`` swap of 3b.8) changed nothing else; the overview table is regenerated
 (``--regen-index``) and each node's ``content_sha`` is filled (``--fill-sha``).
+``--report`` adds informational findings (never counted), among them ``DANGLING_FIELD`` for a
+``revision_of`` / ``supersedes`` that names no node.  ``--pregate P-ID ...`` runs only the
+pre-gate registration check on the named candidates, before each verifier dispatch: a
+``glossary_introduces`` entry that reuses a glossary name, a term defined with ``:=`` or in bold
+that is not listed, an unlisted dual / strict part / inverse of an introduced order symbol.
 
 Pure standard library, Python >= 3.10, UTF-8 file IO.  Usage::
 
     python scripts/pg_check.py <programme_root> [--report] [--regen-index] [--fill-sha] [--json]
+    python scripts/pg_check.py <programme_root> --pregate P-ID [P-ID ...] [--json]
     python "${CLAUDE_PLUGIN_ROOT}/scripts/pg_check.py" g2g --report   # the form the skills use; cwd = the project root
 
 ``<programme_root>`` may be the folder that contains ``g2g/``, the ``g2g/`` folder itself,
-or the ``07_theory/`` folder.  Exit code = number of violations (0 = clean), capped at 255;
-2 on a usage or IO error.  Without ``--regen-index`` / ``--fill-sha`` no file is modified;
-nothing is ever deleted.
+or the ``07_theory/`` folder.  Exit code = number of violations (0 = clean), capped at 255
+(with ``--pregate``: the number of findings for the named candidates); 2 on a usage or IO
+error.  Without ``--regen-index`` / ``--fill-sha`` no file is modified; nothing is ever deleted.
 """
 from __future__ import annotations
 
@@ -33,7 +40,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 THEORY_DIRNAME = "07_theory"
 NODE_DIRS = ("candidates", "propositions")
 REQUIRED_FIELDS = ("id", "kind", "status", "predecessors")
@@ -51,7 +58,10 @@ CODES = ("BAD_FRONTMATTER", "ID_FORMAT", "DANGLING", "CYCLE", "PROPOSED_IN_PROPO
          "CONDITIONAL_NOT_INHERITED", "CONDITIONAL_WITHOUT_GUESS", "FAITHFUL_WITH_SIG",
          "FAITHFUL_WITH_CONDITION", "EXEMPT_REVISION_CHANGED", "MISSING_SHA", "STALE_SHA")
 #: Informational codes (``--report`` only, never counted).
-INFO_CODES = ("CLOSURE_NOT_CLOSED", "SCOPE_MISMATCH", "DUPLICATE_SHA")
+INFO_CODES = ("CLOSURE_NOT_CLOSED", "SCOPE_MISMATCH", "DUPLICATE_SHA", "DANGLING_FIELD")
+#: Pre-gate codes (``--pregate`` only, on the named candidates).  Never part of the default run,
+#: where candidates stay exempt at round start.
+PREGATE_CODES = ("SYMBOL_COLLISION", "UNLISTED_DEFINITION", "UNLISTED_ORDER_DERIVATIVE")
 
 NODE_ID_RE = re.compile(r"^P-\d{4}(?:\.\d+)?$")
 NODE_REF_RE = re.compile(r"P-\d{4}(?:\.\d+)?")
@@ -76,6 +86,20 @@ CJ_STATUS_RE = re.compile(
 STATUS_KEY_RE = re.compile(r"status|状态", re.I)
 #: Forge-log entry title, the only place a round number is read from (never prose).
 FORGE_ROUND_RE = re.compile(r"^##\s*Round\s+(\d+)", re.I | re.M)
+#: Pre-gate, inside Statement and Derivation only: a term defined with ``:=`` (or ``≔``) is the
+#: token left of it; a term defined in bold is the ``**…**`` span.  No other symbol scan.
+DEFINE_RE = re.compile(r"(\S+)\s*(?::=|≔)")
+BOLD_RE = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*")
+#: Order symbols for the pre-gate's dual / strict-part / inverse rule: each string is one family
+#: (non-strict, inverse, strict part, strict inverse); a glyph's variants are the rest of its families.
+ORDER_FAMILIES = ("≤≥<>", "≼≽≺≻", "⪯⪰≺≻", "⊑⊒⊏⊐", "⊆⊇⊂⊃⊊⊋")
+ORDER_VARIANTS = {g: "".join(sorted(set("".join(f for f in ORDER_FAMILIES if g in f)) - {g}))
+                  for g in "".join(ORDER_FAMILIES)}
+#: Reason category of a revocation (``revoked_by: <category> · <reason> · <date>``) and of a
+#: revision (``revision_of: P-xxxx · <category>``); none written = uncategorised.
+REASON_CATEGORIES = ("gate-miss", "cascade", "human-ruling", "mechanical")
+REASON_RE = re.compile(r"[\s\[(`*·:,—–-]*(" + "|".join(REASON_CATEGORIES) + r")(?![\w-])", re.I)  # at the start
+UNCATEGORISED = "uncategorised"
 #: Report glyphs and their ASCII fallback, used when stdout could not be switched to UTF-8.
 ASCII_FALLBACK = (("→", "->"), ("—", "-"), ("·", ","))
 
@@ -122,6 +146,9 @@ class Node:
     verification_raw: str = ""
     verification_id: str = ""
     revision_of: str = ""
+    revision_category: str = ""
+    supersedes: str = ""
+    revoked_category: str = ""
     content_sha: str = ""
     resolved: dict[str, "Node | None"] = field(default_factory=dict)
 
@@ -160,6 +187,7 @@ class Programme:
     axioms: dict[str, str] = field(default_factory=dict)
     conjectures: dict[str, str] = field(default_factory=dict)
     glossary: set[str] = field(default_factory=set)
+    glossary_origin: dict[str, list[str]] = field(default_factory=dict)
     forge_log: str | None = None
     load_violations: list[Violation] = field(default_factory=list)
 
@@ -200,12 +228,12 @@ def _clean(item: str) -> str:
 
 
 def _split_list(inner: str) -> list[str]:
-    """Split ``a, [b], c(d, e)`` at top-level commas."""
+    """Split ``a, [b], c(d, e)`` at top-level commas (a full-width ``（…）`` note is one level too)."""
     items, buf, depth = [], [], 0
     for ch in inner:
-        if ch in "[(":
+        if ch in "[(（":
             depth += 1
-        elif ch in "])":
+        elif ch in "])）":
             depth -= 1
         if ch == "," and depth <= 0:
             items.append("".join(buf))
@@ -305,8 +333,41 @@ def _ref(item: str, pattern: re.Pattern[str]) -> str:
     return m.group(0) if m else item.strip()
 
 
+def _strip_note(sym: str) -> str:
+    """Drop one trailing parenthetical note: a full-width ``（…）`` always, an ASCII ``(…)`` only
+    when whitespace precedes it - so ``𝒫（…）`` and ``𝒫 (…)`` give ``𝒫`` while ``f(x)`` stays."""
+    for opener, closer, spaced in (("（", "）", False), ("(", ")", True)):
+        if not sym.endswith(closer):
+            continue
+        depth = 0
+        for i in range(len(sym) - 1, -1, -1):
+            if sym[i] == closer:
+                depth += 1
+            elif sym[i] == opener:
+                depth -= 1
+                if depth == 0:
+                    head = sym[:i]
+                    if head.strip() and (not spaced or head[-1].isspace()):
+                        return head.rstrip()
+                    break
+    return sym
+
+
 def norm_symbol(sym: str) -> str:
-    return sym.strip().strip("`$*").strip().rstrip(":").strip()
+    """The bare symbol: ``\\|`` read as a literal ``|``; backticks, ``$``, ``*``, a trailing colon
+    and one trailing parenthetical note (``_strip_note``) dropped."""
+    s = sym.replace("\\|", "|")
+    while True:
+        bare = _strip_note(s.strip().strip("`$*").strip().rstrip(":").strip())
+        if bare == s:
+            return bare
+        s = bare
+
+
+def _category(text: str) -> str:
+    """The reason category at the start of a ``revoked_by`` value or right after the ID of ``revision_of``."""
+    m = REASON_RE.match(text)
+    return m.group(1).lower() if m else ""
 
 
 def make_node(path: Path, rel: str, dirname: str, fm: dict[str, object], body: str) -> Node:
@@ -331,8 +392,13 @@ def make_node(path: Path, rel: str, dirname: str, fm: dict[str, object], body: s
     node.verification_raw = _as_str(fm, "verification")
     vm = VREC_REF_RE.search(node.verification_raw)
     node.verification_id = vm.group(0) if vm else ""
-    rm = NODE_REF_RE.search(_as_str(fm, "revision_of"))
+    revision = _as_str(fm, "revision_of")
+    rm = NODE_REF_RE.search(revision)
     node.revision_of = rm.group(0) if rm else ""
+    node.revision_category = _category(revision[rm.end():]) if rm else ""
+    sm = NODE_REF_RE.search(_as_str(fm, "supersedes"))
+    node.supersedes = sm.group(0) if sm else ""
+    node.revoked_category = _category(_as_str(fm, "revoked_by"))
     node.content_sha = _as_str(fm, "content_sha").lower()
     if not node.title:
         first = node.sections.get("statement", "").strip().splitlines()
@@ -371,28 +437,50 @@ def parse_registry(text: str, entry_re: re.Pattern[str], status_re: re.Pattern[s
     return out
 
 
+def _cells(row: str) -> list[str]:
+    """The cells of a Markdown table row, split on unescaped ``|`` only (``\\|`` is a literal pipe)."""
+    s = row.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", s)]
+
+
 def _is_sep_row(line: str) -> bool:
-    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    cells = _cells(line)
     return bool(cells) and all(re.fullmatch(r":?-{2,}:?", c) for c in cells)
+
+
+def glossary_entries(text: str) -> list[tuple[str, str]]:
+    """``(symbol, introduced by)`` per glossary entry: the first column of any table (header row
+    skipped; "introduced by" is the column whose header says so, else the fourth) or a
+    ``- symbol · …`` bullet (introduced by = the first P- ID after the symbol, if any)."""
+    lines = text.splitlines()
+    entries: list[tuple[str, str]] = []
+    origin_col: int | None = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("|"):
+            if _is_sep_row(s):
+                continue
+            cells = _cells(s)
+            if i + 1 < len(lines) and _is_sep_row(lines[i + 1]):
+                origin_col = next((k for k, c in enumerate(cells) if re.search(r"introduced|引入", c, re.I)),
+                                  3 if len(cells) > 3 else None)
+                continue
+            origin = cells[origin_col] if origin_col is not None and origin_col < len(cells) else ""
+            entries.append((norm_symbol(cells[0]), origin))
+        elif s[:2] in ("- ", "* ", "+ "):
+            parts = re.split(r"\s+[·—–:|]\s*|:\s|\t|\s{2,}", s[2:].strip(), maxsplit=1)
+            ref = NODE_REF_RE.search(parts[1]) if len(parts) > 1 else None
+            entries.append((norm_symbol(parts[0]), ref.group(0) if ref else ""))
+    return [(sym, origin) for sym, origin in entries if sym]
 
 
 def parse_glossary(text: str) -> set[str]:
     """Registered symbols: first column of any table (header row skipped) or ``- symbol`` bullets."""
-    lines = text.splitlines()
-    symbols: set[str] = set()
-    for i, line in enumerate(lines):
-        s = line.strip()
-        if s.startswith("|"):
-            if _is_sep_row(s) or (i + 1 < len(lines) and _is_sep_row(lines[i + 1])):
-                continue
-            cells = [c.strip() for c in s.strip("|").split("|")]
-            if cells:
-                symbols.add(norm_symbol(cells[0]))
-        elif s[:2] in ("- ", "* ", "+ "):
-            first = re.split(r"\s+[·—–:|]\s*|:\s|\t|\s{2,}", s[2:].strip(), maxsplit=1)[0]
-            symbols.add(norm_symbol(first))
-    symbols.discard("")
-    return symbols
+    return {sym for sym, _ in glossary_entries(text)}
 
 
 def parse_forge_log(text: str) -> dict[str, int]:
@@ -510,7 +598,9 @@ def load_programme(root: Path, theory: Path) -> Programme:
     _load_vrecords(prog)
     prog.axioms = parse_registry(read_optional(theory / "axioms.md"), AXIOM_ENTRY_RE, AXIOM_STATUS_RE)
     prog.conjectures = parse_registry(read_optional(theory / "conjectures.md"), CJ_ENTRY_RE, CJ_STATUS_RE)
-    prog.glossary = parse_glossary(read_optional(theory / "glossary.md"))
+    for sym, origin in glossary_entries(read_optional(theory / "glossary.md")):
+        prog.glossary.add(sym)
+        prog.glossary_origin.setdefault(sym, []).append(origin)
     prog.forge_log = read_optional(theory / "forge-log.md") or None
     _resolve_all(prog)
     return prog
@@ -756,17 +846,113 @@ def run_checks(prog: Programme) -> list[Violation]:
     return violations
 
 
+# --------------------------------------------------------------------------- pre-gate (--pregate)
+def _names(term: str) -> list[str]:
+    """A defined term and, for ``f(x) := …``, the name ``f`` it defines."""
+    head = term.split("(", 1)[0].rstrip()
+    return [term, head] if head and head != term else [term]
+
+
+def defined_terms(node: Node) -> list[tuple[str, str, str]]:
+    """``(term, section, marker)`` for each term the Statement or the Derivation defines with
+    ``:=`` or in bold (first occurrence only)."""
+    seen: set[str] = set()
+    out = []
+    for section in ("statement", "derivation"):
+        text = node.sections.get(section, "")
+        found = [(m.start(), norm_symbol(m.group(1).lstrip("([{\"'“‘（「『")), ":=")
+                 for m in DEFINE_RE.finditer(text)]
+        found += [(m.start(), norm_symbol(m.group(1)).rstrip(".,;:。，；：").strip(), "bold")
+                  for m in BOLD_RE.finditer(text) if ":=" not in m.group(1) and "≔" not in m.group(1)]
+        for _, term, marker in sorted(found):
+            if term and term not in seen:
+                seen.add(term)
+                out.append((term, section.capitalize(), marker))
+    return out
+
+
+def _same_family(prog: Programme, sym: str, node: Node) -> bool:
+    """Every glossary row for ``sym`` was introduced by a node of ``node``'s own family."""
+    origins = prog.glossary_origin.get(sym, [])
+    refs = [NODE_REF_RE.search(o) for o in origins]
+    return bool(origins) and all(r and r.group(0).split(".")[0] == node.base for r in refs)
+
+
+def pregate(prog: Programme, node: Node) -> list[Violation]:
+    """The pre-gate registration check of one candidate: (1) a ``glossary_introduces`` entry
+    already in glossary.md, unless that row was introduced by the candidate's own family (a
+    revision re-listing its symbol); (2) a term defined with ``:=`` or in bold that is not listed -
+    a collision instead when glossary.md already has the name from another family; (3) the dual,
+    strict part or inverse (same decoration) of an introduced order symbol, used but neither
+    listed nor registered."""
+    out: list[Violation] = []
+    listed = set(node.glossary_introduces)
+
+    def collides(name: str, what: str) -> bool:
+        if name not in prog.glossary or _same_family(prog, name, node):
+            return False
+        origin = ", ".join(o for o in prog.glossary_origin.get(name, []) if o) or "not stated"
+        out.append(Violation("SYMBOL_COLLISION", node.rel,
+                             f"{what} is already registered in glossary.md (introduced by {origin}); "
+                             "a new symbol or defined term may not reuse a glossary name"))
+        return True
+
+    for sym in dict.fromkeys(node.glossary_introduces):
+        collides(sym, f"glossary_introduces {sym}")
+    for term, section, marker in defined_terms(node):
+        names = _names(term)
+        if any(n in listed for n in names):
+            continue
+        if any(collides(n, f"{section} defines {term} ({marker}), but {n}") for n in names):
+            continue
+        if any(n in prog.glossary for n in names):
+            continue  # registered by this candidate's own family
+        out.append(Violation("UNLISTED_DEFINITION", node.rel,
+                             f"{section} defines {term} ({marker}) but glossary_introduces does not list it"))
+    for sym in dict.fromkeys(node.glossary_introduces):
+        for glyph in ORDER_VARIANTS.get(sym[:1], ""):
+            variant = glyph + sym[1:]
+            if variant in listed or variant in prog.glossary:
+                continue
+            used = re.compile(re.escape(variant) + r"(?![\w'′^_{])")
+            where = [s.capitalize() for s in ("statement", "derivation") if used.search(node.sections.get(s, ""))]
+            if where:
+                out.append(Violation("UNLISTED_ORDER_DERIVATIVE", node.rel,
+                                     f"{variant} is used in the {' and '.join(where)} but neither listed nor "
+                                     f"registered; the dual, strict part and inverse of the introduced order "
+                                     f"symbol {sym} each count as a symbol"))
+    return out
+
+
+def run_pregate(prog: Programme, ids: list[str]) -> list[Violation]:
+    """``pregate`` over the named candidates; raises ``LookupError`` for an ID that is not a
+    proposed candidate in ``candidates/``."""
+    nodes = []
+    for nid in dict.fromkeys(ids):
+        node = prog.nodes.get(nid)
+        if node is None:
+            raise LookupError(f"--pregate {nid}: no such node (a file whose frontmatter does not parse "
+                              "is not loaded; run without --pregate to see why)")
+        if node.dirname != "candidates" or node.status != "proposed":
+            raise LookupError(f"--pregate {nid}: not a proposed candidate "
+                              f"({node.dirname}/, status {node.status or 'empty'})")
+        nodes.append(node)
+    return [v for node in nodes for v in pregate(prog, node)]
+
+
 # --------------------------------------------------------------------------- report
 def build_report(prog: Programme, violations: list[Violation]) -> dict[str, object]:
     nodes = list(prog.nodes.values())
     info: list[Violation] = []
     theorems = []
-    for node in sorted((n for n in nodes if n.kind == "theorem"), key=lambda n: n.id):
+    # current revisions only (what a bare ID resolves to); a bare ID in `scope` means the current revision
+    for node in sorted((n for n in nodes if n.kind == "theorem" and resolve_ref(prog, n.base) is n),
+                       key=lambda n: n.id):
         cl = closure(prog, node.id)
         uncond = [c for c in cl if prog.nodes[c].status == "verified" and not prog.nodes[c].conditional_on]
         closed = node.status == "verified" and not node.conditional_on
-        tagged = sorted(m.id for m in nodes if m.id != node.id and m.status == "verified"
-                        and not m.conditional_on and _ref(m.scope, NODE_REF_RE) == node.id)
+        tagged = sorted(m.id for m in nodes if m.base != node.base and m.status == "verified" and not m.conditional_on
+                        and getattr(resolve_ref(prog, _ref(m.scope, NODE_REF_RE)), "id", None) == node.id)
         theorems.append({"id": node.id, "status": node.status, "conditional_on": node.conditional_on,
                          "closure": cl, "closure_size": len(cl), "unconditional_size": len(uncond),
                          "closed": closed, "scope_tagged": tagged})
@@ -776,8 +962,9 @@ def build_report(prog: Programme, violations: list[Violation]) -> dict[str, obje
                                   "the support closure is not closed (3b.7)"))
         if node.status == "verified" and {c.split(".")[0] for c in cl} != {t.split(".")[0] for t in tagged}:
             info.append(Violation("SCOPE_MISMATCH", node.rel,
-                                  f"closure {cl} differs from verified nodes tagged scope={node.id} {tagged}: "
-                                  "the elaboration's route judgment and the graph disagree (3b.7; conditional nodes excluded)"))
+                                  f"closure {cl} differs from the verified nodes whose scope holds this target "
+                                  f"theorem's ID {node.id} {tagged}: the elaboration's route judgment and the "
+                                  "graph disagree (3b.7; conditional nodes excluded)"))
     by_sha: dict[str, list[str]] = {}
     for node in nodes:
         if node.live and SHA_RE.match(node.content_sha):
@@ -786,14 +973,25 @@ def build_report(prog: Programme, violations: list[Violation]) -> dict[str, obje
         if len(ids) > 1:
             info.append(Violation("DUPLICATE_SHA", prog.nodes[ids[0]].rel,
                                   f"identical Statement+Derivation digest {sha} in {', '.join(ids)}"))
+    for node in sorted(nodes, key=_sort_key):
+        for key, ref in (("revision_of", node.revision_of), ("supersedes", node.supersedes)):
+            named = ref in prog.nodes or ("." not in ref and any(
+                n.id != node.id for n in prog.families.get(ref, [])))
+            if ref and not named:
+                info.append(Violation("DANGLING_FIELD", node.rel, f"{key} {ref} names no node"))
+    # the current revision of a family is what its bare ID resolves to; the others are historical
+    current = {r.id for r in (resolve_ref(prog, base) for base in prog.families) if r is not None}
+    revocations = Counter(n.revoked_category or UNCATEGORISED for n in nodes if n.status == "revoked")
+    revisions = Counter(n.revision_category or UNCATEGORISED for n in nodes if n.rev > 0 or n.revision_of)
     cadence = None
     if prog.forge_log is not None:
         counters = parse_forge_log(prog.forge_log)
         k, m, t = CADENCE_DEFAULTS["K"], CADENCE_DEFAULTS["M"], CADENCE_DEFAULTS["T"]
-        verified = sum(1 for n in nodes if n.status == "verified")
+        verified = sum(1 for n in nodes if n.status == "verified" and n.id in current)
         cadence = {**counters, "verified": verified, "defaults": CADENCE_DEFAULTS,
-                   # more verified nodes on disk than the log says passed: the round entry is not written yet
-                   "forge_log_behind": verified > counters["passed"],
+                   # more verified nodes on disk (revisions included: each passed the gate) than the log
+                   # says passed: the round entry is not written yet
+                   "forge_log_behind": sum(1 for n in nodes if n.status == "verified") > counters["passed"],
                    "control_beats_due": counters["submitted"] // k,
                    "next_control_beat_at": (counters["submitted"] // k + 1) * k,
                    "next_macro_audit_round": (counters["rounds"] // m + 1) * m,
@@ -801,7 +999,14 @@ def build_report(prog: Programme, violations: list[Violation]) -> dict[str, obje
     return {"nodes": {"total": len(nodes),
                       "propositions": sum(1 for n in nodes if n.dirname == "propositions"),
                       "candidates": sum(1 for n in nodes if n.dirname == "candidates")},
-            "status": dict(sorted(Counter(n.status for n in nodes).items())),
+            # a revision still under the gate (proposed) counts with the current ones, not as history
+            "status": {"current": dict(sorted(Counter(n.status for n in nodes
+                                                      if n.id in current or n.status == "proposed").items())),
+                       "historical": dict(sorted(Counter(n.status for n in nodes
+                                                         if n.id not in current and n.status != "proposed").items()))},
+            "reasons": {"revocations": dict(sorted(revocations.items())),
+                        "revisions": dict(sorted(revisions.items())),
+                        "gate_misses": revocations["gate-miss"] + revisions["gate-miss"]},
             "empirical_status": dict(sorted(Counter(n.empirical_status or "-" for n in nodes).items())),
             "kind": dict(sorted(Counter(n.kind or "-" for n in nodes).items())),
             "axioms": dict(sorted(Counter(prog.axioms.values()).items())),
@@ -818,10 +1023,15 @@ def render_report(rep: dict[str, object], root: Path, ascii_only: bool = False) 
     def fmt(d: dict[str, int]) -> str:
         return " · ".join(f"{k} {v}" for k, v in d.items()) or "-"
 
-    n = rep["nodes"]
+    n, r = rep["nodes"], rep["reasons"]
     lines = [f"== G2G proposition-graph report: {root} ==",
              f"nodes: {n['total']} (propositions/ {n['propositions']} · candidates/ {n['candidates']})",
-             f"status: {fmt(rep['status'])}", f"empirical_status: {fmt(rep['empirical_status'])}",
+             f"status (current revisions — what a bare ID resolves to — and candidates): "
+             f"{fmt(rep['status']['current'])}",
+             f"status (historical revisions): {fmt(rep['status']['historical'])}",
+             f"revocations by reason: {fmt(r['revocations'])}", f"revisions by reason: {fmt(r['revisions'])}",
+             f"gate misses (revocations and revisions): {r['gate_misses']}",
+             f"empirical_status: {fmt(rep['empirical_status'])}",
              f"kind: {fmt(rep['kind'])}", f"axioms.md (A-/D-): {fmt(rep['axioms'])}",
              f"conjectures.md: {fmt(rep['conjectures'])}", f"glossary symbols: {rep['glossary_symbols']}",
              "theorems (support closure):"]
@@ -839,8 +1049,8 @@ def render_report(rep: dict[str, object], root: Path, ascii_only: bool = False) 
                   f"  rounds logged {c['rounds']} → next macro audit at round {c['next_macro_audit_round']}",
                   f"  cumulative submissions {c['submitted']} (passed {c['passed']}) → control beats due so far "
                   f"{c['control_beats_due']}, next at {c['next_control_beat_at']}",
-                  f"  verified nodes {c['verified']} → next theory tribunal at {c['next_theory_tribunal_at']} "
-                  "(or when a target theorem closes)"]
+                  f"  verified nodes (current revisions) {c['verified']} → next theory tribunal at "
+                  f"{c['next_theory_tribunal_at']} (or when a target theorem closes)"]
         if c.get("forge_log_behind"):
             lines.append("  (forge-log has no entry for the nodes on disk yet — write the round entry)")
     else:
@@ -946,6 +1156,20 @@ def _utf8_console() -> bool:
     return ok
 
 
+def _console_safe(text: str, utf8_console: bool) -> str:
+    """``text`` as the console can print it: unchanged on UTF-8; otherwise the ASCII glyph fallback,
+    and any character the console's code page lacks replaced rather than raising."""
+    if utf8_console:
+        return text
+    for glyph, plain in ASCII_FALLBACK:
+        text = text.replace(glyph, plain)
+    encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        return text.encode(encoding, "replace").decode(encoding, "replace")
+    except LookupError:
+        return text.encode("ascii", "replace").decode("ascii")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pg_check.py",
@@ -956,8 +1180,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--regen-index", action="store_true", help="rewrite g2g/07_theory/graph-index.md")
     parser.add_argument("--fill-sha", action="store_true", help="write missing / stale content_sha into node files")
     parser.add_argument("--json", action="store_true", help="machine-readable output instead of lines")
+    parser.add_argument("--pregate", nargs="+", metavar="P-ID",
+                        help="run only the pre-gate registration check on these proposed candidates, "
+                             "before each verifier dispatch (exit code = number of findings)")
     parser.add_argument("--version", action="version", version=f"pg_check {VERSION}")
     args = parser.parse_args(argv)
+    if args.pregate and (args.report or args.regen_index or args.fill_sha):
+        parser.error("--pregate runs alone (not with --report, --regen-index or --fill-sha)")
     utf8_console = _utf8_console()
     try:
         root, theory = detect_dirs(Path(args.programme_root))
@@ -965,6 +1194,22 @@ def main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, OSError, UnicodeDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    if args.pregate:
+        try:
+            findings = run_pregate(prog, args.pregate)
+        except LookupError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        exit_code = min(len(findings), EXIT_CAP)
+        if args.json:
+            print(json.dumps({"version": VERSION, "programme_root": str(root), "theory_dir": str(theory),
+                              "pregate": list(dict.fromkeys(args.pregate)),
+                              "findings": [v.as_dict() for v in findings], "finding_count": len(findings),
+                              "exit_code": exit_code}, ensure_ascii=False, indent=2))
+        else:
+            for v in findings:
+                print(_console_safe(v.line(), utf8_console))
+        return exit_code
     actions: dict[str, object] = {}
     if args.fill_sha:
         actions["fill_sha"] = fill_sha(prog)
